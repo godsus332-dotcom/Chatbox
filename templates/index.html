@@ -1,127 +1,127 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Chatbox</title>
-    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <title>Hacker Chat</title>
+
+<style>
+body {
+    background: black;
+    color: #00ff00;
+    font-family: monospace;
+}
+
+input, button {
+    background: black;
+    color: #00ff00;
+    border: 1px solid #00ff00;
+    padding: 5px;
+}
+
+#chat {
+    height: 300px;
+    overflow-y: scroll;
+    border: 1px solid #00ff00;
+    padding: 10px;
+}
+
+#users {
+    border: 1px solid #00ff00;
+    padding: 10px;
+    margin-top: 10px;
+}
+
+.typing {
+    color: yellow;
+    font-size: 12px;
+}
+</style>
+
 </head>
+
 <body>
 
-<h2>Chatbox</h2>
+<h2>LOGIN</h2>
+<input id="username" placeholder="username"><br><br>
+<input id="password" type="password" placeholder="password"><br><br>
+<button onclick="login()">Login</button>
 
-<!-- LOGIN -->
-<div id="login">
-    <input id="username" placeholder="Username">
-    <input id="password" type="password" placeholder="Password">
-    <button onclick="login()">Login</button>
-    <p id="loginStatus"></p>
-</div>
+<h2>CHAT</h2>
 
-<!-- CHAT -->
-<div id="chat" style="display:none;">
-    <ul id="messages"></ul>
+<div id="chat"></div><br>
 
-    <input id="msg" placeholder="Message">
-    <button onclick="sendMsg()">Send</button>
+<input id="message" placeholder="type message..." oninput="typing()">
+<button onclick="sendMessage()">Send</button>
 
-    <!-- ADMIN PANEL -->
-    <div id="adminPanel" style="display:none;">
-        <h3>Admin Panel</h3>
+<div class="typing" id="typing"></div>
 
-        <input id="targetUser" placeholder="Username">
+<h3>ONLINE USERS</h3>
+<div id="users"></div>
 
-        <button onclick="kickUser()">Kick</button>
-        <button onclick="banUser()">Ban</button>
-        <button onclick="unbanUser()">Unban</button>
-
-        <br><br>
-
-        <input id="newUser" placeholder="New Username">
-        <input id="newPass" placeholder="Password">
-        <button onclick="addUser()">Add User</button>
-
-        <br><br>
-
-        <button onclick="deleteUser()">Delete User</button>
-    </div>
-</div>
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 
 <script>
-var socket = io();
-let isAdmin = false;
+const socket = io();
+let currentUser = "";
 
+// LOGIN
 function login() {
-    let username = document.getElementById("username").value;
-    let password = document.getElementById("password").value;
-
     socket.emit("login", {
-        username: username,
-        password: password
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value
     });
 }
 
-socket.on("login_response", function(data) {
-    if (data.status === "ok") {
-        document.getElementById("login").style.display = "none";
-        document.getElementById("chat").style.display = "block";
+socket.on("login_success", (data) => {
+    currentUser = data.username;
+    alert("Logged in as " + currentUser);
+});
 
-        if (data.role === "admin") {
-            isAdmin = true;
-            document.getElementById("adminPanel").style.display = "block";
+socket.on("login_error", (msg) => {
+    alert(msg);
+});
+
+// MESSAGE SEND
+function sendMessage() {
+    const msg = document.getElementById("message").value;
+    socket.send(msg);
+    document.getElementById("message").value = "";
+}
+
+// RECEIVE MESSAGE
+socket.on("message", (msg) => {
+    const div = document.createElement("div");
+
+    // typing animation effect
+    let i = 0;
+    function typeWriter() {
+        if (i < msg.length) {
+            div.innerHTML += msg.charAt(i);
+            i++;
+            setTimeout(typeWriter, 20);
         }
     }
-    else if (data.status === "banned") {
-        document.getElementById("loginStatus").innerText = "You are banned!";
-    }
-    else {
-        document.getElementById("loginStatus").innerText = "Login failed!";
-    }
+    typeWriter();
+
+    document.getElementById("chat").appendChild(div);
 });
 
-function sendMsg() {
-    let msg = document.getElementById("msg").value;
-    socket.send(msg);
-    document.getElementById("msg").value = "";
+// TYPING
+function typing() {
+    socket.emit("typing");
 }
 
-socket.on("message", function(msg) {
-    let li = document.createElement("li");
-    li.textContent = msg;
-    document.getElementById("messages").appendChild(li);
+socket.on("typing", (msg) => {
+    document.getElementById("typing").innerText = msg;
+    setTimeout(() => {
+        document.getElementById("typing").innerText = "";
+    }, 1000);
 });
 
-/* ADMIN FUNCTIONS */
-
-function kickUser() {
-    if (!isAdmin) return;
-    socket.emit("kick", { user: getTarget() });
-}
-
-function banUser() {
-    if (!isAdmin) return;
-    socket.emit("ban", { user: getTarget() });
-}
-
-function unbanUser() {
-    if (!isAdmin) return;
-    socket.emit("unban", { user: getTarget() });
-}
-
-function addUser() {
-    if (!isAdmin) return;
-    socket.emit("add_user", {
-        username: document.getElementById("newUser").value,
-        password: document.getElementById("newPass").value
-    });
-}
-
-function deleteUser() {
-    if (!isAdmin) return;
-    socket.emit("delete_user", { username: getTarget() });
-}
-
-function getTarget() {
-    return document.getElementById("targetUser").value;
-}
+// ONLINE USERS
+socket.on("user_list", (users) => {
+    document.getElementById("users").innerHTML =
+        users.map(u => ">> " + u).join("<br>");
+});
 </script>
 
 </body>

@@ -1,146 +1,118 @@
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, send, emit, disconnect
-import os
+import os, time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-
-# IMPORTANT: no async_mode='threading'
 socketio = SocketIO(app)
 
-# =========================
-# In-memory storage
-# =========================
+# ======================
+# DATA STORAGE
+# ======================
 users = {
     "luxcifer": {"password": "0456", "role": "admin"}
 }
 
-banned_users = set()
 active_users = {}   # sid -> username
+banned_users = set()
+messages = []       # (msg, timestamp)
 
-# =========================
-# Routes
-# =========================
+# ======================
+# ROUTES
+# ======================
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# =========================
-# Login system
-# =========================
+# ======================
+# HELPERS
+# ======================
+def clean_messages():
+    now = time.time()
+    return [m for m in messages if now - m[1] < 86400]
+
+def broadcast_users():
+    emit("user_list", list(active_users.values()), broadcast=True)
+
+def is_admin(username):
+    return users.get(username, {}).get("role") == "admin"
+
+# ======================
+# SOCKET EVENTS
+# ======================
 @socketio.on('login')
-def handle_login(data):
-    username = data.get("username")
-    password = data.get("password")
+def login(data):
+    username = data['username']
+    password = data['password']
 
     if username in banned_users:
-        emit("login_response", {"status": "banned"})
+        emit("login_error", "You are banned")
         return
 
-    if username in users and users[username]["password"] == password:
+    if username in users and users[username]['password'] == password:
         active_users[request.sid] = username
-        emit("login_response", {
-            "status": "ok",
-            "role": users[username]["role"]
-        })
-    else:
-        emit("login_response", {"status": "fail"})
+        emit("login_success", {"username": username})
 
-# =========================
-# Chat messaging
-# =========================
+        # send old messages
+        for msg, _ in clean_messages():
+            emit("message", msg)
+
+        broadcast_users()
+
+    else:
+        emit("login_error", "Invalid credentials")
+
+@socketio.on('disconnect')
+def on_disconnect():
+    if request.sid in active_users:
+        active_users.pop(request.sid)
+        broadcast_users()
+
+@socketio.on('typing')
+def typing():
+    username = active_users.get(request.sid)
+    emit("typing", f"{username} is typing...", broadcast=True)
+
 @socketio.on('message')
 def handle_message(msg):
-    user = active_users.get(request.sid)
+    username = active_users.get(request.sid, "Unknown")
 
-    if not user:
+    # ======================
+    # COMMANDS
+    # ======================
+    if msg.startswith("/"):
+        parts = msg.split()
+
+        if parts[0] == "/kick" and is_admin(username):
+            target = parts[1]
+            for sid, user in active_users.items():
+                if user == target:
+                    emit("message", f"[SYSTEM] {target} kicked", broadcast=True)
+                    disconnect(sid)
+                    return
+
+        if parts[0] == "/ban" and is_admin(username):
+            target = parts[1]
+            banned_users.add(target)
+            emit("message", f"[SYSTEM] {target} banned", broadcast=True)
+
+        if parts[0] == "/unban" and is_admin(username):
+            target = parts[1]
+            banned_users.discard(target)
+            emit("message", f"[SYSTEM] {target} unbanned", broadcast=True)
+
         return
 
-    send(f"{user}: {msg}", broadcast=True)
+    # ======================
+    # NORMAL MESSAGE
+    # ======================
+    formatted = f"[{username}] {msg}"
+    messages.append((formatted, time.time()))
+    send(formatted, broadcast=True)
 
-# =========================
-# Admin: Kick user
-# =========================
-@socketio.on('kick')
-def kick_user(data):
-    admin = active_users.get(request.sid)
-
-    if users.get(admin, {}).get("role") != "admin":
-        return
-
-    target = data.get("user")
-
-    for sid, uname in list(active_users.items()):
-        if uname == target:
-            disconnect(sid=sid)
-            del active_users[sid]
-
-# =========================
-# Admin: Ban user
-# =========================
-@socketio.on('ban')
-def ban_user(data):
-    admin = active_users.get(request.sid)
-
-    if users.get(admin, {}).get("role") != "admin":
-        return
-
-    target = data.get("user")
-    banned_users.add(target)
-
-# =========================
-# Admin: Unban user
-# =========================
-@socketio.on('unban')
-def unban_user(data):
-    admin = active_users.get(request.sid)
-
-    if users.get(admin, {}).get("role") != "admin":
-        return
-
-    banned_users.discard(data.get("user"))
-
-# =========================
-# Admin: Add user
-# =========================
-@socketio.on('add_user')
-def add_user(data):
-    admin = active_users.get(request.sid)
-
-    if users.get(admin, {}).get("role") != "admin":
-        return
-
-    username = data.get("username")
-    password = data.get("password")
-
-    if username not in users:
-        users[username] = {
-            "password": password,
-            "role": "user"
-        }
-
-# =========================
-# Admin: Delete user
-# =========================
-@socketio.on('delete_user')
-def delete_user(data):
-    admin = active_users.get(request.sid)
-
-    if users.get(admin, {}).get("role") != "admin":
-        return
-
-    users.pop(data.get("username"), None)
-
-# =========================
-# Disconnect handler
-# =========================
-@socketio.on('disconnect')
-def handle_disconnect():
-    active_users.pop(request.sid, None)
-
-# =========================
-# Run (local only)
-# =========================
+# ======================
+# RUN
+# ======================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
     socketio.run(app, host='0.0.0.0', port=port)
