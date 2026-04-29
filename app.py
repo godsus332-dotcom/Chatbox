@@ -1,199 +1,164 @@
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, send, emit, disconnect
-import os, time
+import time
+import os
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app)
 
-# ======================
-# DATA STORAGE
-# ======================
+# =========================
+# STORAGE
+# =========================
 users = {
     "luxcifer": {"password": "0456", "role": "admin"}
 }
 
-active_users = {}   # sid -> username
 banned_users = set()
-muted_users = set()
-messages = []       # (msg, timestamp)
+active_users = {}  # sid -> username
+messages = []  # {user, msg, time}
 
-# ======================
-# ROUTES
-# ======================
+MESSAGE_LIFETIME = 86400  # 24 hours
+
+# =========================
+# CLEAN OLD MESSAGES
+# =========================
+def clean_messages():
+    now = time.time()
+    global messages
+    messages = [m for m in messages if now - m["time"] < MESSAGE_LIFETIME]
+
+# =========================
+# ROUTE
+# =========================
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# ======================
-# HELPERS
-# ======================
-def is_admin(username):
-    return users.get(username, {}).get("role") == "admin"
-
-def clean_messages():
-    now = time.time()
-    return [m for m in messages if now - m[1] < 86400]
-
-def broadcast_users():
-    emit("user_list", list(active_users.values()), broadcast=True)
-
-# ======================
+# =========================
 # LOGIN
-# ======================
+# =========================
 @socketio.on('login')
-def login(data):
-    username = data['username']
-    password = data['password']
+def handle_login(data):
+    username = data.get("username")
+    password = data.get("password")
 
     if username in banned_users:
         emit("login_error", "You are banned")
         return
 
-    if username in users and users[username]['password'] == password:
+    if username in users and users[username]["password"] == password:
         active_users[request.sid] = username
-        emit("login_success", {"username": username, "role": users[username]["role"]})
-
-        # send previous messages
-        for msg, _ in clean_messages():
-            emit("message", msg)
-
-        broadcast_users()
+        emit("login_success", {"username": username})
+        emit("user_list", list(active_users.values()), broadcast=True)
+        send(f"[SYSTEM] {username} joined", broadcast=True)
     else:
         emit("login_error", "Invalid credentials")
 
-# ======================
+# =========================
 # DISCONNECT
-# ======================
+# =========================
 @socketio.on('disconnect')
-def on_disconnect():
+def handle_disconnect():
     if request.sid in active_users:
-        active_users.pop(request.sid)
-        broadcast_users()
+        user = active_users.pop(request.sid)
+        send(f"[SYSTEM] {user} left", broadcast=True)
+        emit("user_list", list(active_users.values()), broadcast=True)
 
-# ======================
-# TYPING
-# ======================
-@socketio.on('typing')
-def typing():
-    username = active_users.get(request.sid)
-    emit("typing", f"{username} is typing...", broadcast=True)
-
-# ======================
+# =========================
 # MESSAGE HANDLER
-# ======================
+# =========================
 @socketio.on('message')
 def handle_message(msg):
-    username = active_users.get(request.sid, "Unknown")
+    if request.sid not in active_users:
+        return
 
-    # ======================
+    user = active_users[request.sid]
+
     # COMMANDS
-    # ======================
-    if msg.startswith("/"):
-        parts = msg.split()
-        cmd = parts[0]
+    if msg.startswith('/'):
+        handle_command(user, msg)
+        return
 
-        def admin_only():
-            if not is_admin(username):
-                emit("message", "[SYSTEM] Admin only command")
-                return False
-            return True
+    # NORMAL MESSAGE
+    clean_messages()
+    messages.append({
+        "user": user,
+        "msg": msg,
+        "time": time.time()
+    })
 
-        # /kick
-        if cmd == "/kick" and admin_only():
+    send(f"[{user}] {msg}", broadcast=True)
+
+# =========================
+# COMMAND SYSTEM
+# =========================
+def handle_command(user, msg):
+    parts = msg.split()
+    cmd = parts[0]
+
+    role = users[user]["role"]
+
+    # ---------------------
+    # ADMIN COMMANDS
+    # ---------------------
+    if role == "admin":
+
+        if cmd == "/adduser" and len(parts) == 3:
+            u, p = parts[1], parts[2]
+            if u in users:
+                send("[SYSTEM] User exists")
+            else:
+                users[u] = {"password": p, "role": "user"}
+                send(f"[SYSTEM] User {u} added")
+
+        elif cmd == "/deluser" and len(parts) == 2:
+            u = parts[1]
+            if u in users:
+                del users[u]
+                send(f"[SYSTEM] User {u} deleted")
+
+        elif cmd == "/kick" and len(parts) == 2:
             target = parts[1]
-            for sid, user in list(active_users.items()):
-                if user == target:
-                    emit("message", f"[SYSTEM] {target} kicked", broadcast=True)
+            for sid, uname in list(active_users.items()):
+                if uname == target:
                     disconnect(sid)
-                    return
+                    send(f"[SYSTEM] {target} kicked", broadcast=True)
 
-        # /ban
-        if cmd == "/ban" and admin_only():
+        elif cmd == "/ban" and len(parts) == 2:
             target = parts[1]
             banned_users.add(target)
-            emit("message", f"[SYSTEM] {target} banned", broadcast=True)
+            send(f"[SYSTEM] {target} banned")
 
-        # /unban
-        if cmd == "/unban" and admin_only():
+        elif cmd == "/unban" and len(parts) == 2:
             target = parts[1]
             banned_users.discard(target)
-            emit("message", f"[SYSTEM] {target} unbanned", broadcast=True)
+            send(f"[SYSTEM] {target} unbanned")
 
-        # /adduser
-        if cmd == "/adduser" and admin_only():
-            target = parts[1]
-            password = parts[2]
-            users[target] = {"password": password, "role": "user"}
-            emit("message", f"[SYSTEM] user {target} added", broadcast=True)
-
-        # /deleteuser
-        if cmd == "/deleteuser" and admin_only():
-            target = parts[1]
-            users.pop(target, None)
-            emit("message", f"[SYSTEM] user {target} deleted", broadcast=True)
-
-        # /changepass
-        if cmd == "/changepass":
-            if len(parts) < 3:
-                return
-
-            target = parts[1]
-            newpass = parts[2]
-
-            if target == username:
-                users[username]["password"] = newpass
-                emit("message", "[SYSTEM] password changed")
-                return
-
-            if admin_only():
-                if target in users:
-                    users[target]["password"] = newpass
-                    emit("message", f"[SYSTEM] password changed for {target}", broadcast=True)
-
-        # /mute
-        if cmd == "/mute" and admin_only():
-            target = parts[1]
-            muted_users.add(target)
-            emit("message", f"[SYSTEM] {target} muted", broadcast=True)
-
-        # /unmute
-        if cmd == "/unmute" and admin_only():
-            target = parts[1]
-            muted_users.discard(target)
-            emit("message", f"[SYSTEM] {target} unmuted", broadcast=True)
-
-        # /clear
-        if cmd == "/clear" and admin_only():
+        elif cmd == "/clear":
             messages.clear()
-            emit("message", "[SYSTEM] chat cleared", broadcast=True)
+            send("[SYSTEM] Chat cleared", broadcast=True)
 
-        # /whois
-        if cmd == "/whois" and admin_only():
-            target = parts[1]
-            if target in users:
-                role = users[target]["role"]
-                emit("message", f"[SYSTEM] {target} role: {role}")
+    # ---------------------
+    # USER COMMANDS
+    # ---------------------
+    if cmd == "/passwd" and len(parts) == 2:
+        newpass = parts[1]
+        users[user]["password"] = newpass
+        send("[SYSTEM] Password changed")
 
-        return
+    elif cmd == "/users":
+        send("[SYSTEM] Online: " + ", ".join(active_users.values()))
 
-    # ======================
-    # BLOCK MUTED USERS
-    # ======================
-    if username in muted_users:
-        emit("message", "[SYSTEM] You are muted")
-        return
+    else:
+        if cmd.startswith("/") and cmd not in [
+            "/adduser","/deluser","/kick","/ban","/unban","/clear","/passwd","/users"
+        ]:
+            send("[SYSTEM] Unknown command")
 
-    # ======================
-    # NORMAL MESSAGE
-    # ======================
-    formatted = f"[{username}] {msg}"
-    messages.append((formatted, time.time()))
-    send(formatted, broadcast=True)
-
-# ======================
+# =========================
 # RUN
-# ======================
+# =========================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
     socketio.run(app, host='0.0.0.0', port=port)
