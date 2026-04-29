@@ -1,128 +1,146 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Chatbox</title>
-    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
-</head>
-<body>
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, send, emit, disconnect
+import os
 
-<h2>Chatbox</h2>
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
 
-<!-- LOGIN -->
-<div id="login">
-    <input id="username" placeholder="Username">
-    <input id="password" type="password" placeholder="Password">
-    <button onclick="login()">Login</button>
-    <p id="loginStatus"></p>
-</div>
+# IMPORTANT: no async_mode='threading'
+socketio = SocketIO(app)
 
-<!-- CHAT -->
-<div id="chat" style="display:none;">
-    <ul id="messages"></ul>
-
-    <input id="msg" placeholder="Message">
-    <button onclick="sendMsg()">Send</button>
-
-    <!-- ADMIN PANEL -->
-    <div id="adminPanel" style="display:none;">
-        <h3>Admin Panel</h3>
-
-        <input id="targetUser" placeholder="Username">
-
-        <button onclick="kickUser()">Kick</button>
-        <button onclick="banUser()">Ban</button>
-        <button onclick="unbanUser()">Unban</button>
-
-        <br><br>
-
-        <input id="newUser" placeholder="New Username">
-        <input id="newPass" placeholder="Password">
-        <button onclick="addUser()">Add User</button>
-
-        <br><br>
-
-        <button onclick="deleteUser()">Delete User</button>
-    </div>
-</div>
-
-<script>
-var socket = io();
-let isAdmin = false;
-
-function login() {
-    let username = document.getElementById("username").value;
-    let password = document.getElementById("password").value;
-
-    socket.emit("login", {
-        username: username,
-        password: password
-    });
+# =========================
+# In-memory storage
+# =========================
+users = {
+    "luxcifer": {"password": "0456", "role": "admin"}
 }
 
-socket.on("login_response", function(data) {
-    if (data.status === "ok") {
-        document.getElementById("login").style.display = "none";
-        document.getElementById("chat").style.display = "block";
+banned_users = set()
+active_users = {}   # sid -> username
 
-        if (data.role === "admin") {
-            isAdmin = true;
-            document.getElementById("adminPanel").style.display = "block";
+# =========================
+# Routes
+# =========================
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# =========================
+# Login system
+# =========================
+@socketio.on('login')
+def handle_login(data):
+    username = data.get("username")
+    password = data.get("password")
+
+    if username in banned_users:
+        emit("login_response", {"status": "banned"})
+        return
+
+    if username in users and users[username]["password"] == password:
+        active_users[request.sid] = username
+        emit("login_response", {
+            "status": "ok",
+            "role": users[username]["role"]
+        })
+    else:
+        emit("login_response", {"status": "fail"})
+
+# =========================
+# Chat messaging
+# =========================
+@socketio.on('message')
+def handle_message(msg):
+    user = active_users.get(request.sid)
+
+    if not user:
+        return
+
+    send(f"{user}: {msg}", broadcast=True)
+
+# =========================
+# Admin: Kick user
+# =========================
+@socketio.on('kick')
+def kick_user(data):
+    admin = active_users.get(request.sid)
+
+    if users.get(admin, {}).get("role") != "admin":
+        return
+
+    target = data.get("user")
+
+    for sid, uname in list(active_users.items()):
+        if uname == target:
+            disconnect(sid=sid)
+            del active_users[sid]
+
+# =========================
+# Admin: Ban user
+# =========================
+@socketio.on('ban')
+def ban_user(data):
+    admin = active_users.get(request.sid)
+
+    if users.get(admin, {}).get("role") != "admin":
+        return
+
+    target = data.get("user")
+    banned_users.add(target)
+
+# =========================
+# Admin: Unban user
+# =========================
+@socketio.on('unban')
+def unban_user(data):
+    admin = active_users.get(request.sid)
+
+    if users.get(admin, {}).get("role") != "admin":
+        return
+
+    banned_users.discard(data.get("user"))
+
+# =========================
+# Admin: Add user
+# =========================
+@socketio.on('add_user')
+def add_user(data):
+    admin = active_users.get(request.sid)
+
+    if users.get(admin, {}).get("role") != "admin":
+        return
+
+    username = data.get("username")
+    password = data.get("password")
+
+    if username not in users:
+        users[username] = {
+            "password": password,
+            "role": "user"
         }
-    }
-    else if (data.status === "banned") {
-        document.getElementById("loginStatus").innerText = "You are banned!";
-    }
-    else {
-        document.getElementById("loginStatus").innerText = "Login failed!";
-    }
-});
 
-function sendMsg() {
-    let msg = document.getElementById("msg").value;
-    socket.send(msg);
-    document.getElementById("msg").value = "";
-}
+# =========================
+# Admin: Delete user
+# =========================
+@socketio.on('delete_user')
+def delete_user(data):
+    admin = active_users.get(request.sid)
 
-socket.on("message", function(msg) {
-    let li = document.createElement("li");
-    li.textContent = msg;
-    document.getElementById("messages").appendChild(li);
-});
+    if users.get(admin, {}).get("role") != "admin":
+        return
 
-/* ADMIN FUNCTIONS */
+    users.pop(data.get("username"), None)
 
-function kickUser() {
-    if (!isAdmin) return;
-    socket.emit("kick", { user: getTarget() });
-}
+# =========================
+# Disconnect handler
+# =========================
+@socketio.on('disconnect')
+def handle_disconnect():
+    active_users.pop(request.sid, None)
 
-function banUser() {
-    if (!isAdmin) return;
-    socket.emit("ban", { user: getTarget() });
-}
-
-function unbanUser() {
-    if (!isAdmin) return;
-    socket.emit("unban", { user: getTarget() });
-}
-
-function addUser() {
-    if (!isAdmin) return;
-    socket.emit("add_user", {
-        username: document.getElementById("newUser").value,
-        password: document.getElementById("newPass").value
-    });
-}
-
-function deleteUser() {
-    if (!isAdmin) return;
-    socket.emit("delete_user", { username: getTarget() });
-}
-
-function getTarget() {
-    return document.getElementById("targetUser").value;
-}
-</script>
-
-</body>
-</html>
+# =========================
+# Run (local only)
+# =========================
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
+    socketio.run(app, host='0.0.0.0', port=port)
