@@ -29,6 +29,7 @@
 
         #chatbox {
             display: none;
+            padding: 20px;
         }
 
         #chat {
@@ -36,6 +37,14 @@
             border: 1px solid #00ff00;
             overflow-y: auto;
             padding: 10px;
+        }
+
+        .system {
+            color: #00ffff;
+        }
+
+        .user {
+            color: #00ff00;
         }
     </style>
 </head>
@@ -51,6 +60,7 @@
 
 <div id="chatbox">
     <h2>CHAT</h2>
+
     <div id="chat"></div>
 
     <input id="msg" placeholder="Type message...">
@@ -63,6 +73,7 @@
 <script>
 var socket = io();
 
+// ================= LOGIN =================
 function login() {
     socket.emit("login", {
         username: document.getElementById("username").value,
@@ -70,6 +81,7 @@ function login() {
     });
 }
 
+// ================= EVENTS =================
 socket.on("login_success", function() {
     document.getElementById("login").style.display = "none";
     document.getElementById("chatbox").style.display = "block";
@@ -79,35 +91,60 @@ socket.on("login_error", function(msg) {
     alert(msg);
 });
 
+// ================= CHAT HISTORY =================
 socket.on("chat_history", function(data) {
     let chat = document.getElementById("chat");
     chat.innerHTML = "";
+
     data.forEach(msg => {
         chat.innerHTML += msg + "<br>";
     });
 });
 
-socket.on("message", function(msg) {
+// ================= MESSAGE =================
+socket.on("message", function(data) {
     let chat = document.getElementById("chat");
-    chat.innerHTML += msg + "<br>";
+
+    let line = "";
+
+    if (typeof data === "object") {
+        // NEW FORMAT
+        if (data.user === "SYSTEM") {
+            line = `<span class="system">[SYSTEM] ${data.msg}</span>`;
+        } else {
+            line = `<span class="user">[${data.user}] ${data.msg}</span>`;
+        }
+    } else {
+        // OLD FORMAT (history fallback)
+        line = data;
+    }
+
+    chat.innerHTML += line + "<br>";
     chat.scrollTop = chat.scrollHeight;
 });
 
+// ================= USERS =================
 socket.on("user_list", function(users) {
     let box = document.getElementById("users");
     box.innerHTML = "";
+
     users.forEach(u => {
         box.innerHTML += ">> " + u + "<br>";
     });
 });
 
+// ================= FORCE DISCONNECT =================
 socket.on("force_disconnect", function() {
     alert("You were kicked by admin");
     location.reload();
 });
 
+// ================= SEND =================
 function sendMsg() {
     let msg = document.getElementById("msg").value;
+
+    if (!msg.trim()) return;
+
     socket.send(msg);
     document.getElementById("msg").value = "";
 }
