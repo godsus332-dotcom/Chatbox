@@ -1,10 +1,12 @@
 import sqlite3
-import time
+from datetime import datetime, timedelta
 
-DB_NAME = "chat.db"
+DB = "chat.db"
+
 
 def connect():
-    return sqlite3.connect(DB_NAME)
+    return sqlite3.connect(DB)
+
 
 def init_db():
     conn = connect()
@@ -14,7 +16,9 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         username TEXT PRIMARY KEY,
         password TEXT,
-        role TEXT
+        role TEXT DEFAULT 'user',
+        banned INTEGER DEFAULT 0,
+        muted INTEGER DEFAULT 0
     )
     """)
 
@@ -23,27 +27,41 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT,
         message TEXT,
-        timestamp REAL
+        timestamp TEXT
     )
     """)
-
-    # ensure admin exists
-    c.execute("SELECT * FROM users WHERE username=?", ("luxcifer",))
-    if not c.fetchone():
-        c.execute("INSERT INTO users VALUES (?, ?, ?)", ("luxcifer", "0456", "admin"))
 
     conn.commit()
     conn.close()
 
 
-def add_user(username, password):
+# ================= USERS =================
+
+def get_user(username):
     conn = connect()
     c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users VALUES (?, ?, ?)", (username, password, "user"))
-        conn.commit()
-    except:
-        pass
+    c.execute("SELECT * FROM users WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return {
+        "username": row[0],
+        "password": row[1],
+        "role": row[2],
+        "banned": row[3],
+        "muted": row[4]
+    }
+
+
+def add_user(username, password, role="user"):
+    conn = connect()
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?, 0, 0)",
+              (username, password, role))
+    conn.commit()
     conn.close()
 
 
@@ -55,29 +73,50 @@ def delete_user(username):
     conn.close()
 
 
-def get_user(username):
-    conn = connect()
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username=?", (username,))
-    user = c.fetchone()
-    conn.close()
-    return user
-
-
-def get_all_users():
+def list_users():
     conn = connect()
     c = conn.cursor()
     c.execute("SELECT username FROM users")
-    users = [u[0] for u in c.fetchall()]
+    users = [row[0] for row in c.fetchall()]
     conn.close()
     return users
 
 
+def set_muted(username, value):
+    conn = connect()
+    c = conn.cursor()
+    c.execute("UPDATE users SET muted=? WHERE username=?", (value, username))
+    conn.commit()
+    conn.close()
+
+
+def set_banned(username, value):
+    conn = connect()
+    c = conn.cursor()
+    c.execute("UPDATE users SET banned=? WHERE username=?", (value, username))
+    conn.commit()
+    conn.close()
+
+
+def change_password(username, new_pass):
+    conn = connect()
+    c = conn.cursor()
+    c.execute("UPDATE users SET password=? WHERE username=?", (new_pass, username))
+    conn.commit()
+    conn.close()
+
+
+# ================= MESSAGES =================
+
 def save_message(username, message):
     conn = connect()
     c = conn.cursor()
-    c.execute("INSERT INTO messages (username, message, timestamp) VALUES (?, ?, ?)",
-              (username, message, time.time()))
+
+    c.execute(
+        "INSERT INTO messages (username, message, timestamp) VALUES (?, ?, ?)",
+        (username, message, datetime.now().isoformat())
+    )
+
     conn.commit()
     conn.close()
 
@@ -85,24 +124,34 @@ def save_message(username, message):
 def get_recent_messages():
     conn = connect()
     c = conn.cursor()
-    now = time.time()
-    cutoff = now - 86400  # last 24 hours
 
-    c.execute("SELECT username, message FROM messages WHERE timestamp >= ?", (cutoff,))
+    cutoff = datetime.now() - timedelta(hours=24)
+
+    c.execute(
+        "SELECT username, message FROM messages WHERE timestamp >= ?",
+        (cutoff.isoformat(),)
+    )
+
     rows = c.fetchall()
     conn.close()
 
     return [f"[{u}] {m}" for u, m in rows]
 
 
-def clear_old_messages():
+def delete_old_messages():
     conn = connect()
     c = conn.cursor()
 
-    # midnight reset logic
-    now = time.localtime()
-    if now.tm_hour == 0 and now.tm_min == 0:
-        c.execute("DELETE FROM messages")
-        conn.commit()
+    cutoff = datetime.now() - timedelta(hours=24)
 
+    c.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff.isoformat(),))
+    conn.commit()
+    conn.close()
+
+
+def clear_messages():
+    conn = connect()
+    c = conn.cursor()
+    c.execute("DELETE FROM messages")
+    conn.commit()
     conn.close()

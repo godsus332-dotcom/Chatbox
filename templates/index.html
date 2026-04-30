@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Hacker Chat</title>
+    <title>Chatbox</title>
     <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
 
     <style>
@@ -11,136 +11,106 @@
             font-family: monospace;
         }
 
+        #login {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
         input, button {
             background: black;
             color: #00ff00;
             border: 1px solid #00ff00;
-            padding: 5px;
-            margin-top: 5px;
+            padding: 10px;
+            margin: 5px;
+        }
+
+        #chatbox {
+            display: none;
         }
 
         #chat {
             height: 300px;
+            border: 1px solid #00ff00;
             overflow-y: auto;
-            border: 1px solid #00ff00;
             padding: 10px;
-            margin-top: 10px;
-        }
-
-        #users {
-            border: 1px solid #00ff00;
-            padding: 10px;
-            margin-top: 10px;
-        }
-
-        .system {
-            color: yellow;
         }
     </style>
 </head>
 
 <body>
 
-<h2>🔐 LOGIN</h2>
+<div id="login">
+    <h2>LOGIN</h2>
+    <input id="username" placeholder="Username"><br>
+    <input id="password" type="password" placeholder="Password"><br>
+    <button onclick="login()">Login</button>
+</div>
 
-<input id="username" placeholder="Username"><br>
-<input id="password" type="password" placeholder="Password"><br>
-<button onclick="login()">Login</button>
-
-<p id="status"></p>
-
-<!-- CHAT UI (hidden until login) -->
-<div id="chatUI" style="display:none;">
-
-    <h2>💬 CHAT</h2>
-
+<div id="chatbox">
+    <h2>CHAT</h2>
     <div id="chat"></div>
 
-    <input id="msg" placeholder="Type message..." disabled>
+    <input id="msg" placeholder="Type message...">
     <button onclick="sendMsg()">Send</button>
 
-    <h3>👥 ONLINE USERS</h3>
+    <h3>ONLINE USERS</h3>
     <div id="users"></div>
-
 </div>
 
 <script>
-let socket = io();
-let loggedIn = false;
+var socket = io();
 
-// ================= LOGIN =================
-function login(){
-    let u = document.getElementById("username").value;
-    let p = document.getElementById("password").value;
-
-    socket.emit("login", {username:u, password:p});
+function login() {
+    socket.emit("login", {
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value
+    });
 }
 
-// ================= LOGIN RESPONSE =================
-socket.on("login_success", (data)=>{
-    loggedIn = true;
-
-    document.getElementById("status").innerText = "Logged in as " + data.username;
-
-    document.getElementById("chatUI").style.display = "block";
-    document.getElementById("msg").disabled = false;
+socket.on("login_success", function() {
+    document.getElementById("login").style.display = "none";
+    document.getElementById("chatbox").style.display = "block";
 });
 
-socket.on("login_error", (msg)=>{
-    document.getElementById("status").innerText = msg;
+socket.on("login_error", function(msg) {
+    alert(msg);
 });
 
-// ================= SEND =================
-function sendMsg(){
-    if (!loggedIn) return;
-
-    let msg = document.getElementById("msg").value;
-    if (msg.trim() === "") return;
-
-    socket.send(msg);
-    document.getElementById("msg").value = "";
-}
-
-// ================= RECEIVE MESSAGE =================
-socket.on("message", (msg)=>{
-    if (!loggedIn) return;
-
+socket.on("chat_history", function(data) {
     let chat = document.getElementById("chat");
-
-    let line = document.createElement("div");
-
-    if (msg.includes("[SYSTEM]")) {
-        line.className = "system";
-    }
-
-    line.innerText = msg;
-
-    chat.appendChild(line);
-
-    // auto scroll
-    chat.scrollTop = chat.scrollHeight;
-});
-
-// ================= USER LIST =================
-socket.on("user_list", (users)=>{
-    if (!loggedIn) return;
-
-    let box = document.getElementById("users");
-    box.innerHTML = "";
-
-    users.forEach(u => {
-        let div = document.createElement("div");
-        div.innerText = ">> " + u;
-        box.appendChild(div);
+    chat.innerHTML = "";
+    data.forEach(msg => {
+        chat.innerHTML += msg + "<br>";
     });
 });
 
-// ================= ENTER KEY SEND =================
-document.addEventListener("keydown", function(e){
-    if (e.key === "Enter") {
-        sendMsg();
-    }
+socket.on("message", function(msg) {
+    let chat = document.getElementById("chat");
+    chat.innerHTML += msg + "<br>";
+    chat.scrollTop = chat.scrollHeight;
 });
+
+socket.on("user_list", function(users) {
+    let box = document.getElementById("users");
+    box.innerHTML = "";
+    users.forEach(u => {
+        box.innerHTML += ">> " + u + "<br>";
+    });
+});
+
+socket.on("force_disconnect", function() {
+    alert("You were kicked by admin");
+    location.reload();
+});
+
+function sendMsg() {
+    let msg = document.getElementById("msg").value;
+    socket.send(msg);
+    document.getElementById("msg").value = "";
+}
 </script>
 
 </body>
