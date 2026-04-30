@@ -57,8 +57,18 @@ def login(data):
 
     emit("login_success", {"username": username})
 
-    # send last 24h chat
-    emit("chat_history", get_recent_messages())
+    # ===== FIXED CHAT HISTORY =====
+    history = get_recent_messages()
+
+    fixed_history = []
+    for msg in history:
+        if msg.startswith("[") and "]" in msg:
+            fixed_history.append(msg)
+        else:
+            fixed_history.append(f"[UNKNOWN] {msg}")
+
+    emit("chat_history", fixed_history)
+    # ===== END FIX =====
 
     send(f"[SYSTEM] {username} joined", broadcast=True)
     emit("user_list", list(active_users.values()), broadcast=True)
