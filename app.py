@@ -1,43 +1,40 @@
 from flask import Flask, render_template, request
-from flask_socketio import SocketIO, send, emit
-
+from flask_socketio import SocketIO, emit
 from database import (
     init_db, get_user, add_user, delete_user,
-    save_message, get_recent_messages,
-    delete_old_messages, clear_messages,
     set_muted, set_banned, change_password,
-    list_users
+    list_users,
+    save_message, get_recent_messages, delete_old_messages, clear_messages
 )
 
 import os
-import datetime
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 
-# ✅ FIX eventlet issue
+# ✅ Stable config (NO eventlet issues)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= INIT =================
 init_db()
 
-# create default admin
+# default admin
 if not get_user("luxcifer"):
     add_user("luxcifer", "0456", "admin")
 
-active_users = {}  # sid -> username
-
-
-# ================= CONNECT =================
-@socketio.event
-def connect():
-    print("CLIENT CONNECTED")
+active_users = {}  # sid → username
 
 
 # ================= ROUTE =================
 @app.route('/')
 def index():
     return render_template("index.html")
+
+
+# ================= CONNECT =================
+@socketio.event
+def connect():
+    print("CLIENT CONNECTED:", request.sid)
 
 
 # ================= LOGIN =================
@@ -64,113 +61,123 @@ def login(data):
 
     emit("login_success", {"username": username})
 
-    # 🔥 send last 24h messages
-    messages = get_recent_messages()
-    for msg in messages:
-        emit("message", msg)
+    # 🔥 send chat history
+    delete_old_messages()
+    history = get_recent_messages()
+    emit("chat_history", history)
 
-    send(f"[SYSTEM] {username} joined", broadcast=True)
-    emit("user_list", list(active_users.values()), broadcast=True)
+    socketio.emit("message", f"[SYSTEM] {username} joined", broadcast=True)
+    socketio.emit("user_list", list(active_users.values()), broadcast=True)
 
 
 # ================= MESSAGE =================
 @socketio.on("message")
 def handle_message(msg):
     username = active_users.get(request.sid)
+
+    print("MESSAGE RECEIVED:", msg)
+
     if not username:
         return
 
     user = get_user(username)
 
-    # ❌ muted user
+    # 🔇 muted user
     if user["muted"]:
-        send("[SYSTEM] You are muted", to=request.sid)
+        emit("message", "[SYSTEM] You are muted", to=request.sid)
         return
 
     # ================= COMMANDS =================
     if msg.startswith("/"):
         parts = msg.split()
+        cmd = parts[0]
 
-        # ---------- ADMIN COMMANDS ----------
-        if user["role"] == "admin":
+        # ===== COMMON =====
+        if cmd == "/help":
+            emit("message", """[COMMANDS]
+/help
+/whoami
+/changepass <old> <new>
 
-            if parts[0] == "/adduser":
-                add_user(parts[1], parts[2])
-                send(f"[SYSTEM] User {parts[1]} added", to=request.sid)
-
-            elif parts[0] == "/deluser":
-                delete_user(parts[1])
-                send(f"[SYSTEM] User {parts[1]} deleted", to=request.sid)
-
-            elif parts[0] == "/mute":
-                set_muted(parts[1], True)
-                send(f"[SYSTEM] {parts[1]} muted", broadcast=True)
-
-            elif parts[0] == "/unmute":
-                set_muted(parts[1], False)
-                send(f"[SYSTEM] {parts[1]} unmuted", broadcast=True)
-
-            elif parts[0] == "/ban":
-                set_banned(parts[1], True)
-                send(f"[SYSTEM] {parts[1]} banned", broadcast=True)
-
-            elif parts[0] == "/unban":
-                set_banned(parts[1], False)
-                send(f"[SYSTEM] {parts[1]} unbanned", broadcast=True)
-
-            elif parts[0] == "/kick":
-                target = parts[1]
-                for sid, u in list(active_users.items()):
-                    if u == target:
-                        emit("force_disconnect", to=sid)
-                        active_users.pop(sid, None)
-                        send(f"[SYSTEM] {target} kicked", broadcast=True)
-
-            elif parts[0] == "/clear":
-                clear_messages()
-                emit("clear_chat", broadcast=True)
-
-            elif parts[0] == "/lsusers":
-                users = list_users()
-                send("[SYSTEM] Users: " + ", ".join(users), to=request.sid)
-
-        # ---------- COMMON COMMANDS ----------
-        if parts[0] == "/changepass":
-            change_password(username, parts[1], parts[2])
-            send("[SYSTEM] Password updated", to=request.sid)
-
-        elif parts[0] == "/whoami":
-            send(f"[SYSTEM] You are {username}", to=request.sid)
-
-        elif parts[0] == "/help":
-            send("""
-[SYSTEM COMMANDS]
-
-User:
- /changepass <old> <new>
- /whoami
- /help
-
-Admin:
- /adduser <u> <p>
- /deluser <u>
- /mute <u> /unmute <u>
- /ban <u> /unban <u>
- /kick <u>
- /clear
- /lsusers
+[ADMIN]
+/adduser u p
+/deluser u
+/mute u
+/unmute u
+/ban u
+/unban u
+/kick u
+/clear
+/lsusers
 """, to=request.sid)
+            return
+
+        if cmd == "/whoami":
+            emit("message", f"[SYSTEM] You are {username}", to=request.sid)
+            return
+
+        if cmd == "/changepass" and len(parts) == 3:
+            if user["password"] != parts[1]:
+                emit("message", "[SYSTEM] Wrong old password", to=request.sid)
+                return
+            change_password(username, parts[2])
+            emit("message", "[SYSTEM] Password updated", to=request.sid)
+            return
+
+        # ===== ADMIN ONLY =====
+        if user["role"] != "admin":
+            emit("message", "[SYSTEM] Admin only command", to=request.sid)
+            return
+
+        if cmd == "/adduser" and len(parts) == 3:
+            add_user(parts[1], parts[2])
+            emit("message", f"[SYSTEM] User {parts[1]} added", to=request.sid)
+
+        elif cmd == "/deluser" and len(parts) == 2:
+            delete_user(parts[1])
+            emit("message", f"[SYSTEM] User {parts[1]} deleted", to=request.sid)
+
+        elif cmd == "/mute" and len(parts) == 2:
+            set_muted(parts[1], True)
+            socketio.emit("message", f"[SYSTEM] {parts[1]} muted", broadcast=True)
+
+        elif cmd == "/unmute" and len(parts) == 2:
+            set_muted(parts[1], False)
+            socketio.emit("message", f"[SYSTEM] {parts[1]} unmuted", broadcast=True)
+
+        elif cmd == "/ban" and len(parts) == 2:
+            set_banned(parts[1], True)
+            socketio.emit("message", f"[SYSTEM] {parts[1]} banned", broadcast=True)
+
+        elif cmd == "/unban" and len(parts) == 2:
+            set_banned(parts[1], False)
+            socketio.emit("message", f"[SYSTEM] {parts[1]} unbanned", broadcast=True)
+
+        elif cmd == "/kick" and len(parts) == 2:
+            target = parts[1]
+            for sid, u in list(active_users.items()):
+                if u == target:
+                    socketio.emit("force_disconnect", to=sid)
+                    active_users.pop(sid, None)
+                    socketio.emit("message", f"[SYSTEM] {target} kicked", broadcast=True)
+
+        elif cmd == "/clear":
+            clear_messages()
+            socketio.emit("clear_chat", broadcast=True)
+
+        elif cmd == "/lsusers":
+            users = list_users()
+            emit("message", "[SYSTEM] Users: " + ", ".join(users), to=request.sid)
 
         return
 
     # ================= NORMAL MESSAGE =================
     formatted = f"[{username}] {msg}"
-    save_message(formatted)
 
-    # delete old messages (24h cleanup)
+    save_message(username, msg)
     delete_old_messages()
 
-    send(formatted, broadcast=True)
+    socketio.emit("message", formatted, broadcast=True)
 
 
 # ================= DISCONNECT =================
@@ -179,8 +186,8 @@ def disconnect():
     username = active_users.pop(request.sid, None)
 
     if username:
-        send(f"[SYSTEM] {username} left", broadcast=True)
-        emit("user_list", list(active_users.values()), broadcast=True)
+        socketio.emit("message", f"[SYSTEM] {username} left", broadcast=True)
+        socketio.emit("user_list", list(active_users.values()), broadcast=True)
 
 
 # ================= RUN =================
