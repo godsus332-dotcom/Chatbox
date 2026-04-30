@@ -2,125 +2,144 @@
 <html>
 <head>
     <title>Hacker Chat</title>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
 
-<style>
-body {
-    background: black;
-    color: #00ff00;
-    font-family: monospace;
-}
+    <style>
+        body {
+            background: black;
+            color: #00ff00;
+            font-family: monospace;
+        }
 
-input, button {
-    background: black;
-    color: #00ff00;
-    border: 1px solid #00ff00;
-    padding: 5px;
-}
+        input, button {
+            background: black;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 5px;
+            margin-top: 5px;
+        }
 
-#chat {
-    height: 300px;
-    overflow-y: scroll;
-    border: 1px solid #00ff00;
-    padding: 10px;
-}
+        #chat {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #00ff00;
+            padding: 10px;
+            margin-top: 10px;
+        }
 
-#users {
-    border: 1px solid #00ff00;
-    padding: 10px;
-    margin-top: 10px;
-}
+        #users {
+            border: 1px solid #00ff00;
+            padding: 10px;
+            margin-top: 10px;
+        }
 
-.typing {
-    color: yellow;
-    font-size: 12px;
-}
-</style>
-
+        .system {
+            color: yellow;
+        }
+    </style>
 </head>
 
 <body>
 
-<h2>LOGIN</h2>
-<input id="username" placeholder="username"><br><br>
-<input id="password" type="password" placeholder="password"><br><br>
+<h2>🔐 LOGIN</h2>
+
+<input id="username" placeholder="Username"><br>
+<input id="password" type="password" placeholder="Password"><br>
 <button onclick="login()">Login</button>
 
-<h2>CHAT</h2>
+<p id="status"></p>
 
-<div id="chat"></div><br>
+<!-- CHAT UI (hidden until login) -->
+<div id="chatUI" style="display:none;">
 
-<input id="message" placeholder="type message..." oninput="typing()">
-<button onclick="sendMessage()">Send</button>
+    <h2>💬 CHAT</h2>
 
-<div class="typing" id="typing"></div>
+    <div id="chat"></div>
 
-<h3>ONLINE USERS</h3>
-<div id="users"></div>
+    <input id="msg" placeholder="Type message..." disabled>
+    <button onclick="sendMsg()">Send</button>
 
-<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <h3>👥 ONLINE USERS</h3>
+    <div id="users"></div>
+
+</div>
 
 <script>
-const socket = io();
-let currentUser = "";
+let socket = io();
+let loggedIn = false;
 
-// LOGIN
-function login() {
-    socket.emit("login", {
-        username: document.getElementById("username").value,
-        password: document.getElementById("password").value
-    });
+// ================= LOGIN =================
+function login(){
+    let u = document.getElementById("username").value;
+    let p = document.getElementById("password").value;
+
+    socket.emit("login", {username:u, password:p});
 }
 
-socket.on("login_success", (data) => {
-    currentUser = data.username;
-    alert("Logged in as " + currentUser);
+// ================= LOGIN RESPONSE =================
+socket.on("login_success", (data)=>{
+    loggedIn = true;
+
+    document.getElementById("status").innerText = "Logged in as " + data.username;
+
+    document.getElementById("chatUI").style.display = "block";
+    document.getElementById("msg").disabled = false;
 });
 
-socket.on("login_error", (msg) => {
-    alert(msg);
+socket.on("login_error", (msg)=>{
+    document.getElementById("status").innerText = msg;
 });
 
-// MESSAGE SEND
-function sendMessage() {
-    const msg = document.getElementById("message").value;
+// ================= SEND =================
+function sendMsg(){
+    if (!loggedIn) return;
+
+    let msg = document.getElementById("msg").value;
+    if (msg.trim() === "") return;
+
     socket.send(msg);
-    document.getElementById("message").value = "";
+    document.getElementById("msg").value = "";
 }
 
-// RECEIVE MESSAGE
-socket.on("message", (msg) => {
-    const div = document.createElement("div");
+// ================= RECEIVE MESSAGE =================
+socket.on("message", (msg)=>{
+    if (!loggedIn) return;
 
-    // typing animation effect
-    let i = 0;
-    function typeWriter() {
-        if (i < msg.length) {
-            div.innerHTML += msg.charAt(i);
-            i++;
-            setTimeout(typeWriter, 20);
-        }
+    let chat = document.getElementById("chat");
+
+    let line = document.createElement("div");
+
+    if (msg.includes("[SYSTEM]")) {
+        line.className = "system";
     }
-    typeWriter();
 
-    document.getElementById("chat").appendChild(div);
+    line.innerText = msg;
+
+    chat.appendChild(line);
+
+    // auto scroll
+    chat.scrollTop = chat.scrollHeight;
 });
 
-// TYPING
-function typing() {
-    socket.emit("typing");
-}
+// ================= USER LIST =================
+socket.on("user_list", (users)=>{
+    if (!loggedIn) return;
 
-socket.on("typing", (msg) => {
-    document.getElementById("typing").innerText = msg;
-    setTimeout(() => {
-        document.getElementById("typing").innerText = "";
-    }, 1000);
+    let box = document.getElementById("users");
+    box.innerHTML = "";
+
+    users.forEach(u => {
+        let div = document.createElement("div");
+        div.innerText = ">> " + u;
+        box.appendChild(div);
+    });
 });
 
-// ONLINE USERS
-socket.on("user_list", (users) => {
-    document.getElementById("users").innerHTML =
-        users.map(u => ">> " + u).join("<br>");
+// ================= ENTER KEY SEND =================
+document.addEventListener("keydown", function(e){
+    if (e.key === "Enter") {
+        sendMsg();
+    }
 });
 </script>
 
