@@ -34,6 +34,7 @@ def index():
 # ================= LOGIN =================
 @socketio.on("login")
 def login(data):
+   print("LOGIN EVENT RECIVED:",data)
     username = data.get("username")
     password = data.get("password")
 
