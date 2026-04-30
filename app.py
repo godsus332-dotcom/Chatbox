@@ -15,7 +15,11 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 
 # FIX eventlet issue
-socketio = SocketIO(app, async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+@socketio.event
+def test_connect():
+print("CLIENT CONNECTED")
 
 init_db()
 
